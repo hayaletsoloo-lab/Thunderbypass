@@ -127,6 +127,9 @@ public class Aura extends Module {
     public final Setting<Float> attackBaseTime = new Setting<>("AttackBaseTime", 0.5f, 0f, 2f).addToGroup(advanced);
     public final Setting<Integer> attackTickLimit = new Setting<>("AttackTickLimit", 11, 0, 20).addToGroup(advanced);
     public final Setting<Float> critFallDistance = new Setting<>("CritFallDistance", 0f, 0f, 1f).addToGroup(advanced);
+    public final Setting<Boolean> reallyWorld = new Setting<>("ReallyWorld", false, v -> rotationMode.getValue() == Mode.Track || rotationMode.getValue() == Mode.Interact).addToGroup(advanced);
+    public final Setting<Boolean> humanSway = new Setting<>("HumanSway", false, v -> rotationMode.getValue() == Mode.Track || rotationMode.getValue() == Mode.Interact).addToGroup(advanced);
+    public final Setting<Boolean> funTime = new Setting<>("FunTime", false, v -> rotationMode.getValue() == Mode.Track || rotationMode.getValue() == Mode.Interact).addToGroup(advanced);
 
 
     /*   TARGETS   */
@@ -260,7 +263,61 @@ public class Aura extends Module {
         return new boolean[]{blocking, sprint};
     }
 
+    private long lastHitMs = 0L;
+    private boolean ftSwingRight = false;
+    private float ftJitter = 0f, ftJitterTarget = 0f, ftJitterSpeed = 0f, ftMicro = 0f;
+    private float ftPhase = 0f;
+    private long ftLastSwitch = 0L;
+    private final java.util.Random ftRandom = new java.util.Random();
+
+    private float[] funTimeAngles(LivingEntity entity) {
+        Vec3d eye = mc.player.getEyePos();
+        Vec3d base = entity.getPos();
+        float[] points = {0.82f, 0.67f, 0.43f, 0.27f};
+        float mul = points[(int) (System.currentTimeMillis() / 180 % points.length)];
+        double halfWidth = entity.getWidth() / 2.0;
+        double sideOffset = ftSwingRight ? halfWidth * 1.2 : -halfWidth;
+        double yawToEntity = Math.atan2(entity.getZ() - mc.player.getZ(), entity.getX() - mc.player.getX());
+        Vec3d aim = new Vec3d(base.x + Math.cos(yawToEntity + Math.PI / 2) * sideOffset,
+                base.y + entity.getHeight() * mul,
+                base.z + Math.sin(yawToEntity + Math.PI / 2) * sideOffset);
+
+        double dx = aim.x - eye.x;
+        double dy = aim.y - eye.y;
+        double dz = aim.z - eye.z;
+        double dist = Math.sqrt(dx * dx + dz * dz);
+        float baseYaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90.0F;
+        float basePitch = (float) -Math.toDegrees(Math.atan2(dy, dist));
+
+        long now = System.currentTimeMillis();
+        if (now - ftLastSwitch > 200 + ftRandom.nextInt(250)) {
+            ftLastSwitch = now;
+            ftSwingRight = !ftSwingRight;
+            float distanceFactor = (float) MathHelper.clamp(dist / 6.0, 0.4, 1.0);
+            float maxDeviation = 4.0f * distanceFactor;
+            ftJitterTarget = (ftSwingRight ? maxDeviation : -maxDeviation) + (float) (ftRandom.nextGaussian() * 0.6f);
+        }
+
+        float diff = ftJitterTarget - ftJitter;
+        ftJitterSpeed += diff * 0.05f;
+        ftJitterSpeed *= 0.88f;
+        ftJitter += ftJitterSpeed;
+        ftJitter *= 0.985f;
+
+        ftPhase += 0.04f;
+        float sway = (float) Math.sin(ftPhase) * 2.5f;
+        float total = (float) MathHelper.clamp(ftJitter + sway, -halfWidth * 8.5, halfWidth * 8.5);
+        ftMicro += (ftRandom.nextFloat() - 0.5f) * 0.25f;
+        ftMicro *= 0.85f;
+
+        float yaw = baseYaw + total + ftMicro;
+        float pitch = basePitch + (float) Math.sin(ftPhase * 0.8f) * 0.5f;
+        return new float[]{yaw, MathHelper.clamp(pitch, -90.0F, 90.0F)};
+    }
+    private float swayPhase = 0f;
+
     public void postAttack(boolean block, boolean sprint) {
+        lastHitMs = System.currentTimeMillis();
         if (sprint && returnSprint.getValue() && dropSprint.getValue())
             enableSprint();
 
@@ -537,6 +594,10 @@ public class Aura extends Module {
 
         float yawStep = rotationMode.getValue() != Mode.Track ? 360f : random(minYawStep.getValue(), maxYawStep.getValue());
         float pitchStep = rotationMode.getValue() != Mode.Track ? 180f : Managers.PLAYER.ticksElytraFlying > 5 ? 180 : (pitchAcceleration + random(-1f, 1f));
+        if (reallyWorld.getValue()) {
+            yawStep = 180f;
+            pitchStep = 15f;
+        }
 
         if (ready)
             switch (accelerateOnHit.getValue()) {
@@ -557,6 +618,16 @@ public class Aura extends Module {
 
         float newYaw = rotationYaw + (delta_yaw > 0 ? deltaYaw : -deltaYaw);
         float newPitch = MathHelper.clamp(rotationPitch + deltaPitch, -90.0F, 90.0F);
+
+        if (funTime.getValue() && target != null && System.currentTimeMillis() - lastHitMs <= 450) {
+            float[] ft = funTimeAngles(target);
+            newYaw = ft[0];
+            newPitch = ft[1];
+        } else if (humanSway.getValue() && System.currentTimeMillis() - lastHitMs > 450) {
+            swayPhase += 0.04f;
+            newYaw += (float) Math.sin(swayPhase) * 2.5f;
+            newPitch = MathHelper.clamp(newPitch + (float) Math.sin(swayPhase * 0.8f) * 0.5f, -90.0F, 90.0F);
+        }
 
         double gcdFix = (Math.pow(mc.options.getMouseSensitivity().getValue() * 0.6 + 0.2, 3.0)) * 1.2;
 
