@@ -270,7 +270,7 @@ public class Aura extends Module {
     private long ftLastSwitch = 0L;
     private final java.util.Random ftRandom = new java.util.Random();
 
-    private float[] funTimeAngles(LivingEntity entity) {
+    private float[] funTimeAngles(Entity entity) {
         Vec3d eye = mc.player.getEyePos();
         Vec3d base = entity.getPos();
         float[] points = {0.82f, 0.67f, 0.43f, 0.27f};
@@ -619,8 +619,8 @@ public class Aura extends Module {
         float newYaw = rotationYaw + (delta_yaw > 0 ? deltaYaw : -deltaYaw);
         float newPitch = MathHelper.clamp(rotationPitch + deltaPitch, -90.0F, 90.0F);
 
-        if (funTime.getValue() && target != null && System.currentTimeMillis() - lastHitMs <= 450) {
-            float[] ft = funTimeAngles(target);
+        if (funTime.getValue() && target instanceof LivingEntity livingTarget && System.currentTimeMillis() - lastHitMs <= 450) {
+            float[] ft = funTimeAngles(livingTarget);
             newYaw = ft[0];
             newPitch = ft[1];
         } else if (humanSway.getValue() && System.currentTimeMillis() - lastHitMs > 450) {
