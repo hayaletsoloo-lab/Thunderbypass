@@ -18,7 +18,22 @@ import java.util.Objects;
 import static thunder.hack.features.modules.client.ClientSettings.isRu;
 
 public final class RPC extends Module {
-    private static final DiscordRPC rpc = DiscordRPC.INSTANCE;
+    private static DiscordRPC rpcLib;
+    private static boolean rpcLoadFailed;
+
+    // lazy + guarded: Native.load throws on platforms without a matching native (e.g. ARM / mobile linux).
+    // loading in the static initializer crashed the client on startup via ModuleManager.
+    private static DiscordRPC getLib() {
+        if (rpcLib == null && !rpcLoadFailed) {
+            try {
+                rpcLib = DiscordRPC.INSTANCE;
+            } catch (Throwable t) {
+                rpcLoadFailed = true;
+            }
+        }
+        return rpcLib;
+    }
+
     public static Setting<Mode> mode = new Setting<>("Picture", Mode.Recode);
     public static Setting<Boolean> showIP = new Setting<>("ShowIP", true);
     public static Setting<sMode> smode = new Setting<>("StateMode", sMode.Stats);
@@ -70,7 +85,8 @@ public final class RPC extends Module {
         if (thread != null && !thread.isInterrupted()) {
             thread.interrupt();
         }
-        rpc.Discord_Shutdown();
+        DiscordRPC lib = getLib();
+        if (lib != null) lib.Discord_Shutdown();
     }
 
     @Override
@@ -80,17 +96,19 @@ public final class RPC extends Module {
 
     public void startRpc() {
         if (isDisabled()) return;
+        DiscordRPC lib = getLib();
+        if (lib == null) return;
         if (!started) {
             started = true;
             DiscordEventHandlers handlers = new DiscordEventHandlers();
-            rpc.Discord_Initialize("1093053626198523935", handlers, true, "");
+            lib.Discord_Initialize("1093053626198523935", handlers, true, "");
             presence.startTimestamp = (System.currentTimeMillis() / 1000L);
             presence.largeImageText = "v" + ThunderHack.VERSION + " [" + ThunderHack.GITHUB_HASH + "]";
-            rpc.Discord_UpdatePresence(presence);
+            lib.Discord_UpdatePresence(presence);
 
             thread = new Thread(() -> {
                 while (!Thread.currentThread().isInterrupted()) {
-                    rpc.Discord_RunCallbacks();
+                    lib.Discord_RunCallbacks();
                     presence.details = getDetails();
 
                     switch (smode.getValue()) {
@@ -123,7 +141,7 @@ public final class RPC extends Module {
                             }
                         }
                     }
-                    rpc.Discord_UpdatePresence(presence);
+                    lib.Discord_UpdatePresence(presence);
                     try {
                         Thread.sleep(2000L);
                     } catch (InterruptedException ignored) {
