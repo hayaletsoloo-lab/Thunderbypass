@@ -69,6 +69,11 @@ public class Aura extends Module {
     public final Setting<Boolean> elytra = new Setting<>("ElytraOverride",false);
     public final Setting<Float> elytraAttackRange = new Setting<>("ElytraRange", 3.1f, 1f, 6.0f, v -> elytra.getValue());
     public final Setting<Float> elytraWallRange = new Setting<>("ElytraThroughWallsRange", 3.1f, 0f, 6.0f,v -> elytra.getValue());
+    public final Setting<Boolean> elytraAdvanced = new Setting<>("ElytraAdvanced", false, v -> elytra.getValue());
+    public final Setting<Float> elytraOffset = new Setting<>("ElytraOffset", 8f, 5f, 40f, v -> elytra.getValue() && elytraAdvanced.getValue());
+    public final Setting<Float> elytraPredict = new Setting<>("ElytraPredict", 2.6f, 0.1f, 6f, v -> elytra.getValue() && elytraAdvanced.getValue());
+    public final Setting<Integer> elytraEvadeTime = new Setting<>("ElytraEvadeTime", 400, 200, 1000, v -> elytra.getValue() && elytraAdvanced.getValue());
+    public final Setting<Boolean> elytraAvoidWalls = new Setting<>("ElytraAvoidWalls", true, v -> elytra.getValue() && elytraAdvanced.getValue());
     public final Setting<WallsBypass> wallsBypass = new Setting<>("WallsBypass", WallsBypass.Off, v -> getWallRange() > 0);
     public final Setting<Integer> fov = new Setting<>("FOV", 180, 1, 180);
     public final Setting<Mode> rotationMode = new Setting<>("RotationMode", Mode.Track);
@@ -231,7 +236,7 @@ public class Aura extends Module {
 
     private boolean skipRayTraceCheck() {
         return rotationMode.getValue() == Mode.None || rayTrace.getValue() == RayTrace.OFF
-                || rotationMode.is(Mode.Grim)
+                || rotationMode.is(Mode.Grim) || rotationMode.is(Mode.LonyGrief)
                 || (rotationMode.is(Mode.Interact) && (interactTicks.getValue() <= 1
                 || mc.world.getBlockCollisions(mc.player, mc.player.getBoundingBox().expand(-0.25, 0.0, -0.25).offset(0.0, 1, 0.0)).iterator().hasNext()));
     }
@@ -264,6 +269,44 @@ public class Aura extends Module {
     }
 
     private long lastHitMs = 0L;
+    private int elytraPhase = 0;
+    private int elytraDir = 0;
+    private static final Vec3d[] ELYTRA_DIRS = {
+            new Vec3d(0, 0, -1), new Vec3d(0, 0, 1), new Vec3d(-1, 0, 0),
+            new Vec3d(1, 0, 0), new Vec3d(0, 1, 0), new Vec3d(0, -1, 0)
+    };
+
+    // ElytraTarget (exosware) ported into Aura: evasion offset on hit, rotating direction, wall avoidance, predict
+    private Vec3d elytraAimPos(Entity base) {
+        Vec3d center = base.getPos().add(0, base.getHeight() / 2.0, 0);
+        boolean leave = mc.player.getHealth() <= 4.0f || (mc.player.isUsingItem() && !mc.player.getActiveItem().isOf(Items.SHIELD));
+        if (elytraPhase != 0 || leave) {
+            int dirCount = mc.player.isGliding() ? ELYTRA_DIRS.length : ELYTRA_DIRS.length - 1;
+            if (elytraDir >= dirCount) elytraDir = 0;
+            Vec3d cand = center.add(ELYTRA_DIRS[elytraDir].normalize().multiply(elytraOffset.getValue()));
+            if (elytraAvoidWalls.getValue() && elytraObstructed(mc.player.getEyePos(), cand)) {
+                elytraDir = (elytraDir + 1) % dirCount;
+                cand = center.add(ELYTRA_DIRS[elytraDir].normalize().multiply(elytraOffset.getValue()));
+            }
+            if (mc.player.getPos().distanceTo(cand) < 1) elytraPhase = 0;
+            return cand;
+        }
+        Vec3d motion = base.getPos().subtract(base.prevX, base.prevY, base.prevZ);
+        double factor = MathHelper.clamp(elytraPredict.getValue(), 0.2f, 2.5f);
+        Vec3d predicted = motion.multiply(factor * 1.5);
+        if (predicted.lengthSquared() < 1.0E-4) predicted = base.getRotationVecClient().normalize().multiply(factor);
+        return base.getPos().add(predicted).add(0, base.getHeight() / 2.0, 0);
+    }
+
+    private boolean elytraObstructed(Vec3d from, Vec3d to) {
+        return mc.world.raycast(new net.minecraft.world.RaycastContext(
+                from, to,
+                net.minecraft.world.RaycastContext.ShapeType.COLLIDER,
+                net.minecraft.world.RaycastContext.FluidHandling.NONE,
+                mc.player
+        )).getType() != net.minecraft.util.hit.HitResult.Type.MISS;
+    }
+
     private boolean ftSwingRight = false;
     private float ftJitter = 0f, ftJitterTarget = 0f, ftJitterSpeed = 0f, ftMicro = 0f;
     private float ftPhase = 0f;
@@ -318,6 +361,10 @@ public class Aura extends Module {
 
     public void postAttack(boolean block, boolean sprint) {
         lastHitMs = System.currentTimeMillis();
+        if (elytraAdvanced.getValue() && elytra.getValue()) {
+            elytraPhase = 1;
+            elytraDir = (elytraDir + 1) % (mc.player.isGliding() ? ELYTRA_DIRS.length : ELYTRA_DIRS.length - 1);
+        }
         if (sprint && returnSprint.getValue() && dropSprint.getValue())
             enableSprint();
 
@@ -578,9 +625,20 @@ public class Aura extends Module {
             return;
 
 
+        if (rotationMode.is(Mode.LonyGrief)) {
+            // exosware LonyGrief: keep the player's own look, attack without aim correction
+            rotationYaw = mc.player.getYaw();
+            rotationPitch = mc.player.getPitch();
+            ModuleManager.rotations.fixRotation = rotationYaw;
+            return;
+        }
+
         Vec3d targetVec;
 
-        if (mc.player.isFallFlying() || ModuleManager.elytraPlus.isEnabled()) targetVec = target.getEyePos();
+        if (elytraAdvanced.getValue() && elytra.getValue() && mc.player.isFallFlying()) {
+            if (elytraPhase != 0 && System.currentTimeMillis() - lastHitMs > elytraEvadeTime.getValue()) elytraPhase = 0;
+            targetVec = elytraAimPos(target);
+        } else if (mc.player.isFallFlying() || ModuleManager.elytraPlus.isEnabled()) targetVec = target.getEyePos();
         else targetVec = getLegitLook(target);
 
         if (targetVec == null)
@@ -970,7 +1028,7 @@ public class Aura extends Module {
     }
 
     public enum Mode {
-        Interact, Track, Grim, None
+        Interact, Track, Grim, None, LonyGrief
     }
 
     public enum AttackHand {
