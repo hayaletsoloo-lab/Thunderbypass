@@ -281,7 +281,7 @@ public class Aura extends Module {
         Vec3d center = base.getPos().add(0, base.getHeight() / 2.0, 0);
         boolean leave = mc.player.getHealth() <= 4.0f || (mc.player.isUsingItem() && !mc.player.getActiveItem().isOf(Items.SHIELD));
         if (elytraPhase != 0 || leave) {
-            int dirCount = mc.player.isGliding() ? ELYTRA_DIRS.length : ELYTRA_DIRS.length - 1;
+            int dirCount = mc.player.isFallFlying() ? ELYTRA_DIRS.length : ELYTRA_DIRS.length - 1;
             if (elytraDir >= dirCount) elytraDir = 0;
             Vec3d cand = center.add(ELYTRA_DIRS[elytraDir].normalize().multiply(elytraOffset.getValue()));
             if (elytraAvoidWalls.getValue() && elytraObstructed(mc.player.getEyePos(), cand)) {
@@ -363,7 +363,7 @@ public class Aura extends Module {
         lastHitMs = System.currentTimeMillis();
         if (elytraAdvanced.getValue() && elytra.getValue()) {
             elytraPhase = 1;
-            elytraDir = (elytraDir + 1) % (mc.player.isGliding() ? ELYTRA_DIRS.length : ELYTRA_DIRS.length - 1);
+            elytraDir = (elytraDir + 1) % (mc.player.isFallFlying() ? ELYTRA_DIRS.length : ELYTRA_DIRS.length - 1);
         }
         if (sprint && returnSprint.getValue() && dropSprint.getValue())
             enableSprint();
